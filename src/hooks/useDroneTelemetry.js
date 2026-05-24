@@ -53,6 +53,12 @@ export function useDroneTelemetry(enableMock = false) {
     readSavedPosition(),
   );
   const [now, setNow] = useState(() => Date.now());
+  const [telemetrySource, setTelemetrySource] = useState(null);
+  const [lastRawTelemetry, setLastRawTelemetry] = useState(null);
+  const [telemetryFeed, setTelemetryFeed] = useState([]);
+  const [connectionMode, setConnectionMode] = useState("idle");
+  const [wsReadyState, setWsReadyState] = useState("closed");
+  const [httpPollingActive, setHttpPollingActive] = useState(false);
 
   const wsRef = useRef(null);
   const httpIntervalRef = useRef(null);
@@ -74,6 +80,7 @@ export function useDroneTelemetry(enableMock = false) {
       clearInterval(httpIntervalRef.current);
       httpIntervalRef.current = null;
     }
+    setHttpPollingActive(false);
   }, []);
 
   const savePosition = useCallback((position) => {
@@ -90,7 +97,7 @@ export function useDroneTelemetry(enableMock = false) {
   }, []);
 
   const applyTelemetry = useCallback(
-    (data) => {
+    (data, source = "unknown", rawPayload = null) => {
       const position = normalizeTelemetry(data);
 
       if (!position) {
@@ -103,6 +110,20 @@ export function useDroneTelemetry(enableMock = false) {
       setLastSeen(now);
       lastTelemetryAtRef.current = now;
       setHasLiveTelemetry(true);
+      setTelemetrySource(source);
+      setLastRawTelemetry(
+        rawPayload ?? data ?? position ?? null,
+      );
+      setTelemetryFeed((currentFeed) => [
+        {
+          id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+          receivedAt: now,
+          source,
+          payload: rawPayload ?? data ?? position ?? null,
+          parsed: position,
+        },
+        ...currentFeed.slice(0, 19),
+      ]);
       setSatellites(position.satellites);
       setHdop(position.hdop);
       setAltitude(position.altitude);
@@ -129,6 +150,7 @@ export function useDroneTelemetry(enableMock = false) {
     };
 
     const now = Date.now();
+    setConnectionMode("mock");
     setDronePosition(initialPos);
     setConnected(true);
     setLastSeen(now);
@@ -157,6 +179,13 @@ export function useDroneTelemetry(enableMock = false) {
         speed: Math.round(spd),
         satellites: sats,
         hdop: Number(hdopVal.toFixed(2)),
+      }, "mock", {
+        latitude: lat,
+        longitude: lng,
+        altitude: Math.round(alt),
+        speed: Math.round(spd),
+        satellites: sats,
+        hdop: Number(hdopVal.toFixed(2)),
       });
     }, 500);
   }, [applyTelemetry, savePosition]);
@@ -168,12 +197,15 @@ export function useDroneTelemetry(enableMock = false) {
     }
     setConnected(false);
     setDronePosition(null);
+    setConnectionMode("mock-stopped");
   }, []);
 
   const connectWebSocket = useCallback(() => {
     try {
       shouldReconnectRef.current = true;
       stopHttpPolling();
+      setConnectionMode("ws");
+      setWsReadyState("connecting");
 
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -184,13 +216,26 @@ export function useDroneTelemetry(enableMock = false) {
         setConnected(true);
         setError(null);
         lastTelemetryAtRef.current = Date.now();
+        setWsReadyState("open");
       };
 
       ws.onmessage = (event) => {
         try {
-          applyTelemetry(JSON.parse(event.data));
+          const parsed = JSON.parse(event.data);
+          applyTelemetry(parsed, "ws", parsed);
         } catch (parseError) {
           console.warn("Failed to parse WebSocket message:", parseError);
+          setLastRawTelemetry(event.data);
+          setTelemetryFeed((currentFeed) => [
+            {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              receivedAt: Date.now(),
+              source: "ws-raw",
+              payload: event.data,
+              parsed: null,
+            },
+            ...currentFeed.slice(0, 19),
+          ]);
         }
       };
 
@@ -198,6 +243,7 @@ export function useDroneTelemetry(enableMock = false) {
         console.log("WebSocket disconnected");
         setConnected(false);
         setDronePosition(null);
+        setWsReadyState("closed");
 
         if (!shouldReconnectRef.current) {
           return;
@@ -217,10 +263,12 @@ export function useDroneTelemetry(enableMock = false) {
       ws.onerror = (event) => {
         console.error("WebSocket error:", event);
         setError("Connection error");
+        setWsReadyState("error");
       };
     } catch (connectError) {
       console.error("Failed to create WebSocket:", connectError);
       setError("Failed to connect");
+      setWsReadyState("error");
     }
   }, [applyTelemetry, clearReconnectTimeout, stopHttpPolling]);
 
@@ -230,6 +278,8 @@ export function useDroneTelemetry(enableMock = false) {
 
   const startHttpPolling = useCallback(() => {
     stopHttpPolling();
+    setConnectionMode("http");
+    setHttpPollingActive(true);
 
     const fetchTelemetry = async () => {
       const controller = new AbortController();
@@ -243,7 +293,7 @@ export function useDroneTelemetry(enableMock = false) {
 
         if (response.ok) {
           const data = await response.json();
-          applyTelemetry(data);
+          applyTelemetry(data, "http", data);
         }
       } catch (fetchError) {
         if (fetchError.name !== "AbortError") {
@@ -269,6 +319,7 @@ export function useDroneTelemetry(enableMock = false) {
 
     stopHttpPolling();
     setConnected(false);
+    setConnectionMode("idle");
   }, [clearReconnectTimeout, stopHttpPolling]);
 
   useEffect(() => {
@@ -356,6 +407,12 @@ export function useDroneTelemetry(enableMock = false) {
     speed,
     hasLiveTelemetry,
     lastKnownPosition,
+    telemetrySource,
+    lastRawTelemetry,
+    telemetryFeed,
+    connectionMode,
+    wsReadyState,
+    httpPollingActive,
     disconnect,
   };
 }

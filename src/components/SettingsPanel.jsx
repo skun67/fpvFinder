@@ -1,7 +1,12 @@
 import { Settings, X, Info } from "lucide-react";
 import { useState } from "react";
 
-export default function SettingsPanel({ isMockMode, onToggleMockMode }) {
+export default function SettingsPanel({
+  isMockMode,
+  onToggleMockMode,
+  isDebugOverlayEnabled,
+  onToggleDebugOverlay,
+}) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
@@ -74,6 +79,42 @@ export default function SettingsPanel({ isMockMode, onToggleMockMode }) {
                         className={`absolute top-1 h-7 w-7 rounded-full bg-white shadow-[0_8px_18px_rgba(0,0,0,0.25)] transition-transform ${
                           isMockMode
                             ? "translate-x-7 bg-emerald-100"
+                            : "translate-x-1 bg-gray-200"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-[28px] border border-white/10 bg-white/7 p-5 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-md">
+                  <div className="flex flex-col items-center gap-4">
+                    <div className="min-w-0">
+                      <div className="text-base font-medium text-white">
+                        Nakładka debugowania
+                      </div>
+                      <div className="mt-1 text-sm leading-relaxed text-gray-400">
+                        Pokazuje status Backpacka i ostatnie odebrane dane telemetryczne.
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={onToggleDebugOverlay}
+                      className={`relative h-9 w-16 shrink-0 rounded-full border transition-colors ${
+                        isDebugOverlayEnabled
+                          ? "border-sky-400/30 bg-sky-500"
+                          : "border-white/10 bg-slate-600"
+                      }`}
+                      aria-label={
+                        isDebugOverlayEnabled
+                          ? "Wyłącz nakładkę debugowania"
+                          : "Włącz nakładkę debugowania"
+                      }
+                    >
+                      <div
+                        className={`absolute top-1 h-7 w-7 rounded-full bg-white shadow-[0_8px_18px_rgba(0,0,0,0.25)] transition-transform ${
+                          isDebugOverlayEnabled
+                            ? "translate-x-7 bg-sky-100"
                             : "translate-x-1 bg-gray-200"
                         }`}
                       />
