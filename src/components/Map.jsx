@@ -1,102 +1,110 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MapContainer, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { DroneMarker, PilotMarker, DirectionLine } from "./MapMarkers";
 
-// ESRI World Imagery satellite tiles (free, no API key required)
 const SATELLITE_TILE_URL =
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 
 const TILE_ATTRIBUTION =
   "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community";
 
-/**
- * Component to update map center and zoom dynamically
- */
-function MapController({ center, zoom }) {
+function MapViewFollower({ dronePosition, isFollowingDrone }) {
   const map = useMap();
 
   useEffect(() => {
-    if (center) {
-      map.setView(center, zoom || map.getZoom());
+    if (!isFollowingDrone || !dronePosition) {
+      return;
     }
-  }, [center, zoom, map]);
+
+    map.setView(
+      [dronePosition.latitude, dronePosition.longitude],
+      map.getZoom(),
+      { animate: true },
+    );
+  }, [dronePosition, isFollowingDrone, map]);
 
   return null;
 }
 
-/**
- * Component to handle map events and auto-fit bounds
- */
-function MapEvents({ onMove }) {
-  useMapEvents({
-    moveend: (e) => {
-      if (onMove) {
-        onMove(e.target.getCenter());
+function MapInteractionTracker({
+  onPauseFollow,
+  onResumeFollow,
+  resumeDelayMs = 5000,
+}) {
+  const resumeTimerRef = useRef(null);
+
+  const clearResumeTimer = useCallback(() => {
+    if (resumeTimerRef.current) {
+      clearTimeout(resumeTimerRef.current);
+      resumeTimerRef.current = null;
+    }
+  }, []);
+
+  const markUserActivity = useCallback(
+    (event) => {
+      if (!event?.originalEvent) {
+        return;
       }
+
+      onPauseFollow();
+      clearResumeTimer();
+      resumeTimerRef.current = setTimeout(() => {
+        onResumeFollow();
+        resumeTimerRef.current = null;
+      }, resumeDelayMs);
     },
+    [clearResumeTimer, onPauseFollow, onResumeFollow, resumeDelayMs],
+  );
+
+  useMapEvents({
+    dragstart: markUserActivity,
+    drag: markUserActivity,
+    movestart: markUserActivity,
+    move: markUserActivity,
+    zoomstart: markUserActivity,
+    zoom: markUserActivity,
+    wheel: markUserActivity,
   });
+
+  useEffect(() => () => clearResumeTimer(), [clearResumeTimer]);
+
   return null;
 }
 
-/**
- * Main Map component with satellite tiles
- */
 export default function Map({
   pilotPosition,
   dronePosition,
   isDroneLost = false,
-  onCenterChange,
-  defaultCenter = [52.2297, 21.0122], // Warsaw
+  defaultCenter = [52.2297, 21.0122],
   defaultZoom = 15,
 }) {
-  // Calculate center based on pilot and drone positions
-  const calculateCenter = () => {
-    if (pilotPosition && dronePosition) {
-      return [
-        (pilotPosition.latitude + dronePosition.latitude) / 2,
-        (pilotPosition.longitude + dronePosition.longitude) / 2,
-      ];
-    }
-    if (pilotPosition) {
-      return [pilotPosition.latitude, pilotPosition.longitude];
-    }
-    if (dronePosition) {
-      return [dronePosition.latitude, dronePosition.longitude];
-    }
-    return defaultCenter;
-  };
+  const [isFollowingDrone, setIsFollowingDrone] = useState(true);
 
-  const center = calculateCenter();
+  const initialCenter = dronePosition
+    ? [dronePosition.latitude, dronePosition.longitude]
+    : pilotPosition
+      ? [pilotPosition.latitude, pilotPosition.longitude]
+      : defaultCenter;
 
-  // Determine zoom level based on distance between pilot and drone
-  const calculateZoom = () => {
-    if (pilotPosition && dronePosition) {
-      const latDiff = Math.abs(pilotPosition.latitude - dronePosition.latitude);
-      const lngDiff = Math.abs(
-        pilotPosition.longitude - dronePosition.longitude,
-      );
-      const maxDiff = Math.max(latDiff, lngDiff);
+  const initialZoom = pilotPosition && dronePosition ? 15 : defaultZoom;
 
-      if (maxDiff < 0.001) return 17; // Very close
-      if (maxDiff < 0.005) return 16; // Close
-      if (maxDiff < 0.02) return 15; // Medium
-      if (maxDiff < 0.05) return 14; // Far
-      return 13; // Very far
-    }
-    return defaultZoom;
-  };
+  const pauseFollow = useCallback(() => {
+    setIsFollowingDrone(false);
+  }, []);
 
-  const zoom = calculateZoom();
+  const resumeFollow = useCallback(() => {
+    setIsFollowingDrone(true);
+  }, []);
 
   return (
     <div className="absolute inset-0 z-0">
       <MapContainer
-        center={center}
-        zoom={zoom}
+        center={initialCenter}
+        zoom={initialZoom}
         className="h-full w-full"
-        zoomControl={true}
-        attributionControl={true}
+        zoomControl
+        attributionControl
       >
         <TileLayer
           url={SATELLITE_TILE_URL}
@@ -104,13 +112,16 @@ export default function Map({
           maxZoom={19}
         />
 
-        {/* Dynamic map control */}
-        <MapController center={center} zoom={zoom} />
+        <MapInteractionTracker
+          onPauseFollow={pauseFollow}
+          onResumeFollow={resumeFollow}
+        />
 
-        {/* Map events */}
-        <MapEvents onMove={onCenterChange} />
+        <MapViewFollower
+          dronePosition={dronePosition}
+          isFollowingDrone={isFollowingDrone}
+        />
 
-        {/* Direction line from pilot to drone */}
         {pilotPosition && dronePosition && (
           <DirectionLine
             pilotPosition={pilotPosition}
@@ -118,10 +129,8 @@ export default function Map({
           />
         )}
 
-        {/* Pilot marker */}
         {pilotPosition && <PilotMarker position={pilotPosition} />}
 
-        {/* Drone marker */}
         {dronePosition && (
           <DroneMarker position={dronePosition} isLost={isDroneLost} />
         )}

@@ -7,6 +7,16 @@
 }
 
 /* Ensure map controls are visible on dark background */
+.leaflet-top .leaflet-control {
+  margin-top: 14px !important;
+  margin-left: 14px !important;
+}
+
+.leaflet-bottom .leaflet-control {
+  margin-bottom: 14px !important;
+  margin-right: 14px !important;
+}
+
 .leaflet-control-zoom {
   border: none !important;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
@@ -46,6 +56,7 @@
   font-size: 10px !important;
   border-radius: 0 8px 0 0 !important;
   padding: 2px 6px !important;
+  margin: 0 14px 14px 0 !important;
 }
 
 .leaflet-control-attribution a {

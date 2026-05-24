@@ -5,11 +5,40 @@ const WS_URL = `ws://${BACKPACK_IP}/ws`;
 const HTTP_URL = `http://${BACKPACK_IP}/api/telemetry`;
 const STORAGE_KEY = "fpvfinder_last_drone_position";
 
-/**
- * Custom hook for drone telemetry connection
- * Connects to ELRS Backpack via WebSocket or HTTP polling
- * Implements fail-safe: saves last known position to localStorage
- */
+function readSavedPosition() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : null;
+  } catch (error) {
+    console.warn("Failed to load saved drone position:", error);
+    return null;
+  }
+}
+
+function normalizeTelemetry(data) {
+  const latitude = Number(data?.lat ?? data?.latitude);
+  const longitude = Number(data?.lon ?? data?.lng ?? data?.longitude);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  return {
+    latitude,
+    longitude,
+    altitude: Number.isFinite(Number(data?.alt ?? data?.altitude))
+      ? Number(data?.alt ?? data?.altitude)
+      : null,
+    speed: Number.isFinite(Number(data?.speed ?? data?.spd))
+      ? Number(data?.speed ?? data?.spd)
+      : null,
+    satellites: Number.isFinite(Number(data?.sats ?? data?.satellites))
+      ? Number(data?.sats ?? data?.satellites)
+      : null,
+    hdop: Number.isFinite(Number(data?.hdop)) ? Number(data.hdop) : null,
+  };
+}
+
 export function useDroneTelemetry(enableMock = false) {
   const [dronePosition, setDronePosition] = useState(null);
   const [connected, setConnected] = useState(false);
@@ -19,143 +48,26 @@ export function useDroneTelemetry(enableMock = false) {
   const [hdop, setHdop] = useState(null);
   const [altitude, setAltitude] = useState(null);
   const [speed, setSpeed] = useState(null);
+  const [hasLiveTelemetry, setHasLiveTelemetry] = useState(false);
+  const [lastKnownPosition, setLastKnownPosition] = useState(() =>
+    readSavedPosition(),
+  );
+  const [now, setNow] = useState(() => Date.now());
 
   const wsRef = useRef(null);
   const httpIntervalRef = useRef(null);
   const mockIntervalRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const shouldReconnectRef = useRef(true);
+  const lastTelemetryAtRef = useRef(null);
+  const connectWebSocketRef = useRef(null);
 
-  // Load last known position from localStorage on mount
-  const loadLastKnownPosition = useCallback(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return parsed;
-      }
-    } catch (e) {
-      console.warn("Failed to load saved drone position:", e);
-    }
-    return null;
-  }, []);
-
-  // Save current position to localStorage
-  const savePosition = useCallback((position) => {
-    try {
-      const dataToSave = {
-        ...position,
-        savedAt: Date.now(),
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
-    } catch (e) {
-      console.warn("Failed to save drone position:", e);
+  const clearReconnectTimeout = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
   }, []);
-
-  // Mock drone data for development
-  const startMockTelemetry = useCallback(() => {
-    const startLat = 52.231;
-    const startLng = 21.015;
-    let time = 0;
-
-    // Set initial mock position
-    const initialPos = {
-      latitude: startLat,
-      longitude: startLng,
-      altitude: 30,
-      speed: 0,
-      satellites: 12,
-      hdop: 0.8,
-    };
-    setDronePosition(initialPos);
-    setConnected(true);
-    setLastSeen(Date.now());
-    setSatellites(12);
-    setHdop(0.8);
-    setAltitude(30);
-    setSpeed(0);
-    savePosition(initialPos);
-
-    mockIntervalRef.current = setInterval(() => {
-      time += 0.3;
-      const lat = startLat + Math.sin(time * 0.15) * 0.004;
-      const lng = startLng + Math.cos(time * 0.12) * 0.005;
-      const alt = 30 + Math.sin(time * 0.2) * 20 + Math.random() * 2;
-      const spd = 5 + Math.abs(Math.sin(time * 0.1)) * 10 + Math.random();
-      const sats = 10 + Math.floor(Math.random() * 6);
-      const hdopVal = 0.6 + Math.random() * 0.5;
-
-      const mockData = {
-        latitude: lat,
-        longitude: lng,
-        altitude: Math.round(alt),
-        speed: Math.round(spd),
-        satellites: sats,
-        hdop: parseFloat(hdopVal.toFixed(2)),
-      };
-
-      setDronePosition(mockData);
-      setLastSeen(Date.now());
-      setSatellites(sats);
-      setHdop(parseFloat(hdopVal.toFixed(2)));
-      setAltitude(Math.round(alt));
-      setSpeed(Math.round(spd));
-      setConnected(true);
-      setError(null);
-      savePosition(mockData);
-    }, 500);
-  }, [savePosition]);
-
-  const stopMockTelemetry = useCallback(() => {
-    if (mockIntervalRef.current) {
-      clearInterval(mockIntervalRef.current);
-      mockIntervalRef.current = null;
-    }
-    setConnected(false);
-  }, []);
-
-  // HTTP polling fallback
-  const startHttpPolling = useCallback(() => {
-    const fetchTelemetry = async () => {
-      try {
-        const response = await fetch(HTTP_URL, {
-          method: "GET",
-          signal: AbortSignal.timeout(5000),
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          const position = {
-            latitude: data.lat || data.latitude,
-            longitude: data.lon || data.lng || data.longitude,
-            altitude: data.alt || data.altitude,
-            speed: data.speed || data.spd,
-            satellites: data.sats || data.satellites,
-            hdop: data.hdop,
-          };
-
-          if (position.latitude && position.longitude) {
-            setDronePosition(position);
-            setLastSeen(Date.now());
-            setSatellites(position.satellites || null);
-            setHdop(position.hdop || null);
-            setAltitude(position.altitude || null);
-            setSpeed(position.speed || null);
-            setConnected(true);
-            setError(null);
-            savePosition(position);
-          }
-        }
-      } catch (e) {
-        if (e.name !== "AbortError") {
-          console.warn("HTTP polling error:", e);
-        }
-      }
-    };
-
-    httpIntervalRef.current = setInterval(fetchTelemetry, 1000);
-    fetchTelemetry();
-  }, [savePosition]);
 
   const stopHttpPolling = useCallback(() => {
     if (httpIntervalRef.current) {
@@ -164,187 +76,273 @@ export function useDroneTelemetry(enableMock = false) {
     }
   }, []);
 
-  // WebSocket connection - using useRef to avoid forward reference issue
+  const savePosition = useCallback((position) => {
+    try {
+      const dataToSave = {
+        ...position,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+      setLastKnownPosition(dataToSave);
+    } catch (error) {
+      console.warn("Failed to save drone position:", error);
+    }
+  }, []);
+
+  const applyTelemetry = useCallback(
+    (data) => {
+      const position = normalizeTelemetry(data);
+
+      if (!position) {
+        return;
+      }
+
+      const now = Date.now();
+
+      setDronePosition(position);
+      setLastSeen(now);
+      lastTelemetryAtRef.current = now;
+      setHasLiveTelemetry(true);
+      setSatellites(position.satellites);
+      setHdop(position.hdop);
+      setAltitude(position.altitude);
+      setSpeed(position.speed);
+      setConnected(true);
+      setError(null);
+      savePosition(position);
+    },
+    [savePosition],
+  );
+
+  const startMockTelemetry = useCallback(() => {
+    const startLat = 52.231;
+    const startLng = 21.015;
+    let time = 0;
+
+    const initialPos = {
+      latitude: startLat,
+      longitude: startLng,
+      altitude: 30,
+      speed: 0,
+      satellites: 12,
+      hdop: 0.8,
+    };
+
+    const now = Date.now();
+    setDronePosition(initialPos);
+    setConnected(true);
+    setLastSeen(now);
+    setHasLiveTelemetry(true);
+    setSatellites(12);
+    setHdop(0.8);
+    setAltitude(30);
+    setSpeed(0);
+    savePosition(initialPos);
+    lastTelemetryAtRef.current = now;
+
+    mockIntervalRef.current = setInterval(() => {
+      time += 0.3;
+
+      const lat = startLat + Math.sin(time * 0.15) * 0.004;
+      const lng = startLng + Math.cos(time * 0.12) * 0.005;
+      const alt = 30 + Math.sin(time * 0.2) * 20 + Math.random() * 2;
+      const spd = 5 + Math.abs(Math.sin(time * 0.1)) * 10 + Math.random();
+      const sats = 10 + Math.floor(Math.random() * 6);
+      const hdopVal = 0.6 + Math.random() * 0.5;
+
+      applyTelemetry({
+        latitude: lat,
+        longitude: lng,
+        altitude: Math.round(alt),
+        speed: Math.round(spd),
+        satellites: sats,
+        hdop: Number(hdopVal.toFixed(2)),
+      });
+    }, 500);
+  }, [applyTelemetry, savePosition]);
+
+  const stopMockTelemetry = useCallback(() => {
+    if (mockIntervalRef.current) {
+      clearInterval(mockIntervalRef.current);
+      mockIntervalRef.current = null;
+    }
+    setConnected(false);
+    setDronePosition(null);
+  }, []);
+
   const connectWebSocket = useCallback(() => {
     try {
+      shouldReconnectRef.current = true;
+      stopHttpPolling();
+
       const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
 
       ws.onopen = () => {
         console.log("WebSocket connected to Backpack");
+        clearReconnectTimeout();
         setConnected(true);
         setError(null);
+        lastTelemetryAtRef.current = Date.now();
       };
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          const position = {
-            latitude: data.lat || data.latitude,
-            longitude: data.lon || data.lng || data.longitude,
-            altitude: data.alt || data.altitude,
-            speed: data.speed || data.spd,
-            satellites: data.sats || data.satellites,
-            hdop: data.hdop,
-          };
-
-          if (position.latitude && position.longitude) {
-            setDronePosition(position);
-            setLastSeen(Date.now());
-            setSatellites(position.satellites || null);
-            setHdop(position.hdop || null);
-            setAltitude(position.altitude || null);
-            setSpeed(position.speed || null);
-            setConnected(true);
-            setError(null);
-            savePosition(position);
-          }
-        } catch (e) {
-          console.warn("Failed to parse WebSocket message:", e);
+          applyTelemetry(JSON.parse(event.data));
+        } catch (parseError) {
+          console.warn("Failed to parse WebSocket message:", parseError);
         }
       };
 
       ws.onclose = () => {
         console.log("WebSocket disconnected");
         setConnected(false);
-        // Use a ref-based approach to avoid forward reference
+        setDronePosition(null);
+
+        if (!shouldReconnectRef.current) {
+          return;
+        }
+
+        clearReconnectTimeout();
         reconnectTimeoutRef.current = setTimeout(() => {
-          if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
-            // Re-create WebSocket connection
-            try {
-              const newWs = new WebSocket(WS_URL);
-              wsRef.current = newWs;
-
-              newWs.onopen = () => {
-                console.log("WebSocket reconnected to Backpack");
-                setConnected(true);
-                setError(null);
-              };
-
-              newWs.onmessage = (event) => {
-                try {
-                  const data = JSON.parse(event.data);
-                  const position = {
-                    latitude: data.lat || data.latitude,
-                    longitude: data.lon || data.lng || data.longitude,
-                    altitude: data.alt || data.altitude,
-                    speed: data.speed || data.spd,
-                    satellites: data.sats || data.satellites,
-                    hdop: data.hdop,
-                  };
-
-                  if (position.latitude && position.longitude) {
-                    setDronePosition(position);
-                    setLastSeen(Date.now());
-                    setSatellites(position.satellites || null);
-                    setHdop(position.hdop || null);
-                    setAltitude(position.altitude || null);
-                    setSpeed(position.speed || null);
-                    setConnected(true);
-                    setError(null);
-                    savePosition(position);
-                  }
-                } catch (e) {
-                  console.warn("Failed to parse WebSocket message:", e);
-                }
-              };
-
-              newWs.onclose = () => {
-                console.log("WebSocket disconnected again");
-                setConnected(false);
-                // Schedule another reconnect attempt
-                reconnectTimeoutRef.current = setTimeout(() => {
-                  if (
-                    !wsRef.current ||
-                    wsRef.current.readyState === WebSocket.CLOSED
-                  ) {
-                    // This will be handled by the main effect
-                  }
-                }, 3000);
-              };
-
-              newWs.onerror = (err) => {
-                console.error("WebSocket reconnection error:", err);
-                setError("Connection error");
-              };
-            } catch (e) {
-              console.error("Failed to reconnect WebSocket:", e);
-            }
+          if (
+            shouldReconnectRef.current &&
+            (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED)
+          ) {
+            connectWebSocketRef.current?.();
           }
         }, 3000);
       };
 
-      ws.onerror = (err) => {
-        console.error("WebSocket error:", err);
+      ws.onerror = (event) => {
+        console.error("WebSocket error:", event);
         setError("Connection error");
       };
-
-      wsRef.current = ws;
-    } catch (e) {
-      console.error("Failed to create WebSocket:", e);
+    } catch (connectError) {
+      console.error("Failed to create WebSocket:", connectError);
       setError("Failed to connect");
     }
-  }, [savePosition]);
+  }, [applyTelemetry, clearReconnectTimeout, stopHttpPolling]);
+
+  useEffect(() => {
+    connectWebSocketRef.current = connectWebSocket;
+  }, [connectWebSocket]);
+
+  const startHttpPolling = useCallback(() => {
+    stopHttpPolling();
+
+    const fetchTelemetry = async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      try {
+        const response = await fetch(HTTP_URL, {
+          method: "GET",
+          signal: controller.signal,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          applyTelemetry(data);
+        }
+      } catch (fetchError) {
+        if (fetchError.name !== "AbortError") {
+          console.warn("HTTP polling error:", fetchError);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    httpIntervalRef.current = setInterval(fetchTelemetry, 1000);
+    fetchTelemetry();
+  }, [applyTelemetry, stopHttpPolling]);
 
   const disconnect = useCallback(() => {
+    shouldReconnectRef.current = false;
+    clearReconnectTimeout();
+
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
+
     stopHttpPolling();
     setConnected(false);
-  }, [stopHttpPolling]);
+  }, [clearReconnectTimeout, stopHttpPolling]);
 
-  // Main effect for connection management
   useEffect(() => {
-    // Handle mock mode
     if (enableMock) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      startMockTelemetry();
+      const startMockTimer = setTimeout(() => {
+        startMockTelemetry();
+      }, 0);
+
       return () => {
+        clearTimeout(startMockTimer);
         stopMockTelemetry();
       };
     }
 
-    // Try WebSocket first
-    connectWebSocket();
+    const connectionStart = setTimeout(() => {
+      connectWebSocket();
+    }, 0);
 
-    // Fallback to HTTP polling after 2 seconds if not connected
     const httpFallback = setTimeout(() => {
-      if (!connected && wsRef.current?.readyState !== WebSocket.OPEN) {
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
         console.log("WebSocket failed, trying HTTP polling...");
         startHttpPolling();
       }
     }, 2000);
 
     return () => {
+      clearTimeout(connectionStart);
       clearTimeout(httpFallback);
       disconnect();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enableMock]); // Only depend on enableMock to avoid re-triggering
+  }, [clearReconnectTimeout, connectWebSocket, disconnect, enableMock, startHttpPolling, startMockTelemetry, stopMockTelemetry]);
 
-  // Calculate time since last signal
+  useEffect(() => {
+    if (enableMock) {
+      return undefined;
+    }
+
+    const watchdog = setInterval(() => {
+      if (!lastTelemetryAtRef.current) {
+        return;
+      }
+
+      const staleForMs = Date.now() - lastTelemetryAtRef.current;
+
+      if (staleForMs > 2500) {
+        setConnected(false);
+        setDronePosition(null);
+      }
+    }, 1000);
+
+    return () => clearInterval(watchdog);
+  }, [enableMock]);
+
+  useEffect(() => {
+    const clock = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(clock);
+  }, []);
+
   const timeSinceLastSeen = useMemo(() => {
     if (!lastSeen) return null;
-    // eslint-disable-next-line react-hooks/purity
-    const diff = Date.now() - lastSeen;
+
+    const diff = now - lastSeen;
     if (diff < 1000) return "<1s";
+
     const seconds = Math.floor(diff / 1000);
     if (seconds < 60) return `${seconds}s`;
+
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
     return `${minutes}m ${remainingSeconds}s`;
-  }, [lastSeen]);
-
-  // Get last known position from localStorage
-  const lastKnownPosition = useMemo(
-    () => loadLastKnownPosition(),
-    [loadLastKnownPosition],
-  );
+  }, [lastSeen, now]);
 
   return {
     dronePosition,
@@ -356,6 +354,7 @@ export function useDroneTelemetry(enableMock = false) {
     hdop,
     altitude,
     speed,
+    hasLiveTelemetry,
     lastKnownPosition,
     disconnect,
   };
