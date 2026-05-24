@@ -1,122 +1,111 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useState, useCallback } from "react";
+import Map from "./components/Map";
+import InfoPanel from "./components/InfoPanel";
+import SettingsPanel from "./components/SettingsPanel";
+import { useUserLocation } from "./hooks/useUserLocation";
+import { useDroneTelemetry } from "./hooks/useDroneTelemetry";
+import { getNavigationUrl } from "./utils/helpers";
+import "./App.css";
 
 function App() {
-  const [count, setCount] = useState(0)
+  // Mock mode state (for development without real hardware)
+  const [isMockMode, setIsMockMode] = useState(false);
+
+  // User location hook
+  const {
+    location: pilotLocation,
+    error: pilotError,
+    loading: pilotLoading,
+    accuracy: pilotAccuracy,
+  } = useUserLocation(isMockMode);
+
+  // Drone telemetry hook
+  const {
+    dronePosition,
+    connected,
+    error: droneError,
+    timeSinceLastSeen,
+    satellites,
+    altitude,
+    speed,
+    lastKnownPosition,
+  } = useDroneTelemetry(isMockMode);
+
+  // Determine if drone is lost (disconnected but we have last known position)
+  const isDroneLost = !connected && lastKnownPosition !== null;
+
+  // Handle navigation to lost drone
+  const handleLostDroneNavigate = useCallback((lat, lng) => {
+    const url = getNavigationUrl(lat, lng);
+    window.open(url, "_blank");
+  }, []);
+
+  // Prepare pilot position with accuracy info
+  const pilotPosition = pilotLocation
+    ? {
+        latitude: pilotLocation.latitude,
+        longitude: pilotLocation.longitude,
+        accuracy: pilotAccuracy,
+      }
+    : null;
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="relative h-full w-full bg-gray-900 overflow-hidden">
+      {/* Map Component */}
+      <Map
+        pilotPosition={pilotPosition}
+        dronePosition={
+          dronePosition || (isDroneLost ? lastKnownPosition : null)
+        }
+        isDroneLost={isDroneLost}
+      />
 
-      <div className="ticks"></div>
+      {/* Settings Panel */}
+      <SettingsPanel
+        isMockMode={isMockMode}
+        onToggleMockMode={() => setIsMockMode(!isMockMode)}
+      />
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+      {/* Pilot location error overlay */}
+      {pilotError && !isMockMode && (
+        <div className="absolute top-4 left-4 right-16 z-[1100] bg-yellow-900/90 border border-yellow-700 text-yellow-200 px-4 py-3 rounded-lg text-sm backdrop-blur-sm">
+          <p className="font-medium">⚠️ {pilotError}</p>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+      )}
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+      {/* Loading indicator */}
+      {pilotLoading && !isMockMode && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[1100] bg-gray-900/80 px-6 py-4 rounded-xl border border-gray-700 backdrop-blur-sm">
+          <div className="text-white text-center">
+            <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+            <p className="text-sm">Lokalizacja GPS...</p>
+          </div>
+        </div>
+      )}
+
+      {/* Info Panel - Always visible at bottom */}
+      <InfoPanel
+        pilotPosition={pilotPosition}
+        dronePosition={dronePosition}
+        isConnected={connected}
+        satellites={satellites}
+        altitude={altitude}
+        speed={speed}
+        timeSinceLastSeen={timeSinceLastSeen}
+        isDroneLost={isDroneLost}
+        lastKnownPosition={lastKnownPosition}
+        onLostDroneNavigate={handleLostDroneNavigate}
+      />
+
+      {/* Title/Logo overlay */}
+      <div className="absolute top-4 left-4 z-[1100]">
+        <div className="bg-gray-900/80 backdrop-blur-sm px-4 py-2 rounded-lg border border-gray-700">
+          <h1 className="text-white font-bold text-lg">FPV Finder</h1>
+          <p className="text-xs text-gray-400">Śledzenie drona na żywo</p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-export default App
+export default App;
