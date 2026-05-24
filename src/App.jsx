@@ -23,7 +23,6 @@ function App() {
   const {
     dronePosition,
     connected,
-    error: droneError,
     timeSinceLastSeen,
     satellites,
     altitude,
@@ -33,6 +32,9 @@ function App() {
 
   // Determine if drone is lost (disconnected but we have last known position)
   const isDroneLost = !connected && lastKnownPosition !== null;
+
+  // Always show drone position - either current or last known
+  const displayDronePosition = dronePosition || lastKnownPosition;
 
   // Handle navigation to lost drone
   const handleLostDroneNavigate = useCallback((lat, lng) => {
@@ -54,28 +56,34 @@ function App() {
       {/* Map Component */}
       <Map
         pilotPosition={pilotPosition}
-        dronePosition={
-          dronePosition || (isDroneLost ? lastKnownPosition : null)
-        }
+        dronePosition={displayDronePosition}
         isDroneLost={isDroneLost}
       />
 
-      {/* Settings Panel */}
+      {/* Settings Panel - moved to top-right with more margin */}
       <SettingsPanel
         isMockMode={isMockMode}
         onToggleMockMode={() => setIsMockMode(!isMockMode)}
       />
 
+      {/* Title/Logo overlay - moved to avoid zoom controls */}
+      <div className="absolute top-4 left-4 right-16 z-[1100] pointer-events-none">
+        <div className="bg-gray-900/60 backdrop-blur-xl px-4 py-2.5 rounded-2xl border border-white/10 inline-block">
+          <h1 className="text-white font-bold text-base">FPV Finder</h1>
+          <p className="text-xs text-gray-400">Śledzenie drona na żywo</p>
+        </div>
+      </div>
+
       {/* Pilot location error overlay */}
       {pilotError && !isMockMode && (
-        <div className="absolute top-4 left-4 right-16 z-[1100] bg-yellow-900/90 border border-yellow-700 text-yellow-200 px-4 py-3 rounded-lg text-sm backdrop-blur-sm">
+        <div className="absolute top-20 left-4 right-16 z-[1100] bg-yellow-900/80 backdrop-blur-xl border border-yellow-700/50 text-yellow-200 px-4 py-3 rounded-2xl text-sm">
           <p className="font-medium">⚠️ {pilotError}</p>
         </div>
       )}
 
       {/* Loading indicator */}
       {pilotLoading && !isMockMode && (
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[1100] bg-gray-900/80 px-6 py-4 rounded-xl border border-gray-700 backdrop-blur-sm">
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[1100] bg-gray-900/80 backdrop-blur-xl px-6 py-4 rounded-2xl border border-white/10">
           <div className="text-white text-center">
             <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
             <p className="text-sm">Lokalizacja GPS...</p>
@@ -96,14 +104,6 @@ function App() {
         lastKnownPosition={lastKnownPosition}
         onLostDroneNavigate={handleLostDroneNavigate}
       />
-
-      {/* Title/Logo overlay */}
-      <div className="absolute top-4 left-4 z-[1100]">
-        <div className="bg-gray-900/80 backdrop-blur-sm px-4 py-2 rounded-lg border border-gray-700">
-          <h1 className="text-white font-bold text-lg">FPV Finder</h1>
-          <p className="text-xs text-gray-400">Śledzenie drona na żywo</p>
-        </div>
-      </div>
     </div>
   );
 }

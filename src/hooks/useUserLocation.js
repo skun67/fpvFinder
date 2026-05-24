@@ -57,6 +57,7 @@ export function useUserLocation(enableMock = false) {
 
     // Check if geolocation is available
     if (!navigator.geolocation) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError("Geolocation is not supported by this browser");
       setLoading(false);
       return;
