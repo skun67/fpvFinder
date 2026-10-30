@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { Analytics } from "@vercel/analytics/react";
 import Map from "./components/Map";
 import InfoPanel from "./components/InfoPanel";
 import SettingsPanel from "./components/SettingsPanel";
@@ -245,6 +246,8 @@ function App() {
         lastKnownPosition={lastKnownPosition}
         onLostDroneNavigate={handleLostDroneNavigate}
       />
+
+      <Analytics />
     </div>
   );
 }
